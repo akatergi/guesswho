@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import LZString from 'lz-string'
 import './App.css'
 
 const TOTAL = 30
@@ -8,6 +9,26 @@ async function searchImage(name) {
     const res = await fetch(`/api/search-image?q=${encodeURIComponent(name)}`)
     const data = await res.json()
     return data.image || null
+  } catch {
+    return null
+  }
+}
+
+function encodeBoardToHash(names, images) {
+  const data = names.map(n => [n, images[n] || ''])
+  return LZString.compressToEncodedURIComponent(JSON.stringify(data))
+}
+
+function decodeBoardFromHash(hash) {
+  try {
+    const json = LZString.decompressFromEncodedURIComponent(hash)
+    if (!json) return null
+    const data = JSON.parse(json)
+    if (!Array.isArray(data) || data.length !== TOTAL) return null
+    const names = data.map(d => d[0])
+    const images = {}
+    data.forEach(([name, img]) => { if (img) images[name] = img })
+    return { names, images }
   } catch {
     return null
   }
@@ -48,14 +69,16 @@ function NameInput({ onGenerate }) {
   )
 }
 
-function Board({ names, onBack }) {
-  const [images, setImages] = useState({})
-  const [loading, setLoading] = useState(true)
+function Board({ names, initialImages, onBack }) {
+  const [images, setImages] = useState(initialImages || {})
+  const [loading, setLoading] = useState(!initialImages)
   const [flipped, setFlipped] = useState({})
   const [editing, setEditing] = useState(null)
   const [urlInput, setUrlInput] = useState('')
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
+    if (initialImages) return
     let cancelled = false
     Promise.all(
       names.map(name =>
@@ -69,7 +92,13 @@ function Board({ names, onBack }) {
       setLoading(false)
     })
     return () => { cancelled = true }
-  }, [names])
+  }, [names, initialImages])
+
+  useEffect(() => {
+    if (loading) return
+    const hash = encodeBoardToHash(names, images)
+    window.history.replaceState(null, '', '#' + hash)
+  }, [images, loading, names])
 
   const toggleFlip = (name) => {
     if (editing) return
@@ -91,6 +120,13 @@ function Board({ names, onBack }) {
     setUrlInput('')
   }
 
+  const handleShare = () => {
+    navigator.clipboard.writeText(window.location.href).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
   if (loading) {
     return (
       <div className="loading">
@@ -110,6 +146,9 @@ function Board({ names, onBack }) {
         {missingCount > 0 && (
           <span className="missing-hint">{missingCount} missing — click ? to add image URL</span>
         )}
+        <button className="share-btn" onClick={handleShare}>
+          {copied ? 'Copied!' : 'Share Board'}
+        </button>
       </div>
       {editing && (
         <div className="url-modal" onClick={() => setEditing(null)}>
@@ -156,12 +195,31 @@ function Board({ names, onBack }) {
 }
 
 function App() {
-  const [names, setNames] = useState(null)
+  const [board, setBoard] = useState(null)
 
-  if (names) {
-    return <Board names={names} onBack={() => setNames(null)} />
+  useEffect(() => {
+    const hash = window.location.hash.slice(1)
+    if (hash) {
+      const decoded = decodeBoardFromHash(hash)
+      if (decoded) {
+        setBoard(decoded)
+      }
+    }
+  }, [])
+
+  const handleGenerate = (names) => {
+    setBoard({ names, images: null })
   }
-  return <NameInput onGenerate={setNames} />
+
+  const handleBack = () => {
+    window.history.replaceState(null, '', window.location.pathname)
+    setBoard(null)
+  }
+
+  if (board) {
+    return <Board names={board.names} initialImages={board.images} onBack={handleBack} />
+  }
+  return <NameInput onGenerate={handleGenerate} />
 }
 
 export default App
